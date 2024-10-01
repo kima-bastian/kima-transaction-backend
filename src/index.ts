@@ -15,7 +15,10 @@ import {
 import { fetchWrapper } from './fetch-wrapper'
 import { Network, validate as validateBTC } from 'bitcoin-address-validation'
 
-dotenv.config()
+dotenv.config({
+  path:
+    process.env.NODE_ENV === 'development' ? 'envs/dev.env' : 'envs/prod.env'
+})
 
 const app: Express = express()
 const port = process.env.PORT || 3001
@@ -377,6 +380,105 @@ app.post('/submit', authenticateJWT, async (req: Request, res: Response) => {
   } catch (e) {
     console.log(e)
     res.status(500).send('failed to submit transaction')
+  }
+})
+
+app.post(
+  '/submit/onramp',
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const {
+      originAddress,
+      originChain,
+      targetAddress,
+      targetChain,
+      symbol,
+      amount,
+      fee,
+      htlcCreationHash,
+      htlcCreationVout,
+      htlcExpirationTimestamp,
+      htlcVersion,
+      senderPubKey,
+      sourceAccountId,
+      sourceBankAccountId
+    } = req.body
+
+    // make the internal payment
+    try {
+      console.log('onramp: ', req.body);
+      const url = `${process.env.KIMA_BACKEND_NODE_PROVIDER}/submit/onramp`
+
+      const response: any = await fetchWrapper.post(url, {
+        originAddress,
+        originChain,
+        targetAddress,
+        targetChain,
+        symbol,
+        amount,
+        fee,
+        htlcCreationHash,
+        htlcCreationVout,
+        htlcExpirationTimestamp,
+        htlcVersion,
+        senderPubKey: hexStringToUint8Array(senderPubKey),
+        sourceAccountId,
+        sourceBankAccountId,
+        amountToTransfer: amount,
+      })
+
+      res.status(200).json({
+        code: 0,
+        ...response
+      })
+    } catch (e) {
+      console.error(e)
+      return res.status(500).send('Onramp transaction failed')
+    }
+  }
+)
+
+app.get('/depasify/accounts', async (req: Request, res: Response) => {
+  const url = 'https://sandbox.depasify.com/api/v1/accounts'
+
+  try {
+    const response: any = await fetchWrapper.get(url, process.env.DEPASIFY_API_KEY)
+    const {data: accounts} = response
+    
+    // consider filtering by usd accounts
+    const accountsWithBalance = accounts.filter(
+      ({ balance, id }: any) =>
+        Object.keys(balance).length > 0 && id !== process.env.KIMA_ACCOUNT_ID
+    )
+
+    // // now fetch the bank accounts and build a new array
+    let accountsWithBankInfo = []
+    for (const { id, balance, complete_name } of accountsWithBalance) {
+
+      const response :any = await fetchWrapper.get(
+        `https://sandbox.depasify.com/api/v1/accounts/${id}/bank_accounts`,
+        process.env.DEPASIFY_API_KEY
+      )
+
+      const { data: bankAccounts } = response;
+
+      let accountWithBankInfo = {
+        accountId: id,
+        balance: balance,
+        name: complete_name,
+        bankAccounts
+      }
+
+      accountsWithBankInfo.push(accountWithBankInfo)
+    }
+
+    res.status(200).json({
+      status: 'success',
+      accountsWithBankInfo
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).send('failed to get accounts from depasify')
   }
 })
 
